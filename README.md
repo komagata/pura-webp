@@ -1,6 +1,8 @@
 # pura-webp
 
-Pure Ruby WebP decoder/encoder. Part of the pura-* series.
+A pure Ruby WebP decoder/encoder with zero C extension dependencies.
+
+Part of the **pura-*** series — pure Ruby image codec gems.
 
 ## Features
 
@@ -12,8 +14,8 @@ Pure Ruby WebP decoder/encoder. Part of the pura-* series.
 
 ## Installation
 
-```ruby
-gem 'pura-webp'
+```bash
+gem install pura-webp
 ```
 
 ## Usage
@@ -52,16 +54,38 @@ cropped = image.crop(10, 10, 50, 50)
 File.binwrite("output.ppm", image.to_ppm)
 ```
 
+## Benchmark
+
+400×400 image, Ruby 4.0.2 + YJIT.
+
+### Decode (VP8 lossy)
+
+| Decoder | Time |
+|---------|------|
+| ffmpeg (C) | 66 ms |
+| **pura-webp** | **207 ms** |
+
+No other pure scripting-language WebP decoder exists. Lossy encoder coming soon.
+
 ## Why pure Ruby?
 
-- `gem install` just works — no compiler, no native libraries
-- Cross-platform: macOS, Linux, Windows, even WebAssembly
-- Perfect for dev tools, CI pipelines, and serverless
+- **`gem install` and go** — no compiler, no native libraries
+- **Cross-platform** — macOS, Linux, Windows, even WebAssembly
+- **Perfect for dev tools, CI pipelines, and serverless**
+- **Part of pura-\*** — convert between JPEG, PNG, BMP, GIF, TIFF, WebP seamlessly
 
 ## Related gems
 
-- [pura-jpeg](https://github.com/komagata/pura-jpeg) — Pure Ruby JPEG decoder/encoder
-- [pura-png](https://github.com/komagata/pura-png) — Pure Ruby PNG decoder/encoder
+| Gem | Format | Status |
+|-----|--------|--------|
+| [pura-jpeg](https://github.com/komagata/pura-jpeg) | JPEG | ✅ Available |
+| [pura-png](https://github.com/komagata/pura-png) | PNG | ✅ Available |
+| [pura-bmp](https://github.com/komagata/pura-bmp) | BMP | ✅ Available |
+| [pura-gif](https://github.com/komagata/pura-gif) | GIF | ✅ Available |
+| [pura-tiff](https://github.com/komagata/pura-tiff) | TIFF | ✅ Available |
+| [pura-ico](https://github.com/komagata/pura-ico) | ICO | ✅ Available |
+| **pura-webp** | WebP | ✅ Available |
+| [pura-image](https://github.com/komagata/pura-image) | All formats | ✅ Available |
 
 ## License
 
