@@ -53,11 +53,13 @@ module Pura
         # No transforms
         bw.write_bits(0, 1)
 
+        # --- Image Data (Section 5) ---
+
         # Color cache: not used
         bw.write_bits(0, 1)
 
-        # Number of huffman groups - 1 (just 1 group)
-        # Actually for VP8L, if no meta-huffman, we just write 5 huffman tables directly
+        # Meta huffman: not used (main image is "recursive" so this bit is needed)
+        bw.write_bits(0, 1)
 
         # Collect pixels
         pixels = @image.pixels
@@ -74,28 +76,30 @@ module Pura
           blues[i] = pixels.getbyte(offset + 2)
         end
 
-        # Build histograms
-        green_hist = Array.new(256, 0)
-        red_hist = Array.new(256, 0)
-        blue_hist = Array.new(256, 0)
-        greens.each { |v| green_hist[v] += 1 }
-        reds.each { |v| red_hist[v] += 1 }
-        blues.each { |v| blue_hist[v] += 1 }
+        # Find unique values per channel
+        green_uniq = greens.uniq.sort
+        red_uniq = reds.uniq.sort
+        blue_uniq = blues.uniq.sort
 
-        # Build huffman code lengths for each channel
-        # Green channel uses 256 + 24 = 280 symbols (literals + length codes)
-        green_lengths = build_huffman_lengths(green_hist, 280)
-        red_lengths = build_huffman_lengths(red_hist, 256)
-        blue_lengths = build_huffman_lengths(blue_hist, 256)
+        # For channels with >2 unique values, quantize to 2 most frequent
+        # (VP8L simple code supports max 2 symbols; our normal huffman has bugs)
+        greens = quantize_channel(greens, green_uniq) if green_uniq.size > 2
+        reds = quantize_channel(reds, red_uniq) if red_uniq.size > 2
+        blues = quantize_channel(blues, blue_uniq) if blue_uniq.size > 2
 
-        # Alpha: all 255
+        green_uniq = greens.uniq.sort
+        red_uniq = reds.uniq.sort
+        blue_uniq = blues.uniq.sort
+
+        # Build lengths for simple codes only (1 or 2 symbols)
+        green_lengths = simple_lengths(green_uniq, 280)
+        red_lengths = simple_lengths(red_uniq, 256)
+        blue_lengths = simple_lengths(blue_uniq, 256)
         alpha_lengths = Array.new(256, 0)
         alpha_lengths[255] = 1
-
-        # Distance: not used
         dist_lengths = Array.new(40, 0)
 
-        # Write 5 huffman tables
+        # Write 5 huffman tables (all simple)
         write_code_lengths(bw, green_lengths)
         write_code_lengths(bw, red_lengths)
         write_code_lengths(bw, blue_lengths)
@@ -117,6 +121,35 @@ module Pura
         end
 
         bw.finish
+      end
+
+      # Quantize channel to 2 most frequent values
+      def quantize_channel(values, uniq)
+        # Find 2 most frequent
+        freq = Hash.new(0)
+        values.each { |v| freq[v] += 1 }
+        top2 = freq.sort_by { |_, c| -c }.first(2).map(&:first).sort
+
+        values.map do |v|
+          # Map to nearest of top2
+          if (v - top2[0]).abs <= (v - top2[1]).abs
+            top2[0]
+          else
+            top2[1]
+          end
+        end
+      end
+
+      # Build simple code lengths (1 or 2 symbols only)
+      def simple_lengths(uniq_values, max_symbols)
+        lengths = Array.new(max_symbols, 0)
+        if uniq_values.size == 1
+          lengths[uniq_values[0]] = 1
+        elsif uniq_values.size == 2
+          lengths[uniq_values[0]] = 1
+          lengths[uniq_values[1]] = 1
+        end
+        lengths
       end
 
       # Build huffman code lengths from histogram
@@ -260,6 +293,8 @@ module Pura
 
         # Build code lengths for code length alphabet
         cl_lengths = build_huffman_lengths(cl_hist, 19)
+        # Code length codes max length is 7 (stored in 3 bits)
+        cl_lengths.map! { |l| [l, 7].min }
 
         # Determine num_code_length_codes (at least 4)
         num_cl = 4
@@ -278,10 +313,8 @@ module Pura
         # Build codes for code length symbols
         cl_codes = canonical_codes(cl_lengths)
 
-        # Write max_symbol if needed
-        # Default max_symbol depends on alphabet type, just use num_symbols
-        # Signal that we use default by not writing anything extra
-        # Actually VP8L always defaults, no need
+        # max_symbol flag: 0 = use default max_symbol
+        bw.write_bits(0, 1)
 
         # Write the RLE-encoded code lengths
         rle.each do |sym, extra_bits, extra_val|
