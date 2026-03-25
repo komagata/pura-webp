@@ -32,7 +32,7 @@ module Pura
         riff = read_bytes(4)
         raise DecodeError, "not a RIFF file" unless riff == "RIFF"
 
-        file_size = read_u32_le
+        read_u32_le
         webp = read_bytes(4)
         raise DecodeError, "not a WebP file" unless webp == "WEBP"
 
@@ -63,9 +63,9 @@ module Pura
         b2 = read_u8
         frame_tag = b0 | (b1 << 8) | (b2 << 16)
 
-        keyframe = (frame_tag & 0x01) == 0  # 0 = keyframe
-        version = (frame_tag >> 1) & 0x07
-        show_frame = (frame_tag >> 4) & 0x01
+        keyframe = frame_tag.nobits?(0x01) # 0 = keyframe
+        (frame_tag >> 1) & 0x07
+        (frame_tag >> 4) & 0x01
         first_part_size = (frame_tag >> 5) & 0x7FFFF
 
         raise DecodeError, "not a keyframe" unless keyframe
@@ -81,12 +81,11 @@ module Pura
         size1 = read_u16_le
 
         width = size0 & 0x3FFF
-        h_scale = size0 >> 14
+        size0 >> 14
         height = size1 & 0x3FFF
-        v_scale = size1 >> 14
+        size1 >> 14
 
         # First partition starts after the 10-byte keyframe header
-        first_part_offset = @pos
         first_part_data = @data.byteslice(chunk_start + 3, first_part_size)
 
         # Token (coefficient) data follows the first partition
@@ -96,8 +95,8 @@ module Pura
         # Phase 3: Parse frame header using boolean decoder
         bd = BoolDecoder.new(first_part_data)
 
-        color_space = bd.read_flag   # 0=YCbCr
-        clamping = bd.read_flag      # clamping type
+        bd.read_flag # 0=YCbCr
+        bd.read_flag # clamping type
 
         # Segmentation
         segmentation_enabled = bd.read_flag
@@ -127,20 +126,18 @@ module Pura
         end
 
         # Loop filter
-        filter_type = bd.read_flag     # 0=simple, 1=normal
-        loop_filter_level = bd.read_literal(6)
-        sharpness_level = bd.read_literal(3)
+        bd.read_flag # 0=simple, 1=normal
+        bd.read_literal(6)
+        bd.read_literal(3)
         loop_filter_adj_enable = bd.read_flag
-        if loop_filter_adj_enable
-          if bd.read_flag # mode_ref_lf_delta_update
-            4.times { bd.read_signed(6) if bd.read_flag }  # ref_lf_deltas
-            4.times { bd.read_signed(6) if bd.read_flag }  # mode_lf_deltas
-          end
+        if loop_filter_adj_enable && bd.read_flag # mode_ref_lf_delta_update
+          4.times { bd.read_signed(6) if bd.read_flag } # ref_lf_deltas
+          4.times { bd.read_signed(6) if bd.read_flag } # mode_lf_deltas
         end
 
         # Partitions
         num_log2_partitions = bd.read_literal(2)
-        num_partitions = 1 << num_log2_partitions
+        1 << num_log2_partitions
 
         # Quantization
         y_ac_qi = bd.read_literal(7)
@@ -154,7 +151,7 @@ module Pura
         @dequant = build_dequant(y_ac_qi, y_dc_delta, y2_dc_delta, y2_ac_delta, uv_dc_delta, uv_ac_delta)
 
         # Refresh entropy probs
-        refresh_probs = bd.read_flag
+        bd.read_flag
 
         # Token probability updates
         @coeff_probs = VP8Tables.default_coeff_probs
@@ -189,11 +186,11 @@ module Pura
             # UV mode
             uv_mode = read_kf_uv_mode(bd)
 
-            unless skip
-              # Decode coefficients and reconstruct
-              decode_macroblock(tbd, mb_row, mb_col, y_mode, uv_mode,
-                                y_buf, u_buf, v_buf, y_stride, uv_stride)
-            end
+            next if skip
+
+            # Decode coefficients and reconstruct
+            decode_macroblock(tbd, mb_row, mb_col, y_mode, uv_mode,
+                              y_buf, u_buf, v_buf, y_stride, uv_stride)
           end
         end
 
@@ -213,13 +210,13 @@ module Pura
       KF_UV_MODE_PROBS = [142, 114, 183].freeze
 
       def read_kf_y_mode(bd)
-        if bd.read_bool(KF_Y_MODE_PROBS[0]) == 0
+        if bd.read_bool(KF_Y_MODE_PROBS[0]).zero?
           B_PRED
-        elsif bd.read_bool(KF_Y_MODE_PROBS[1]) == 0
+        elsif bd.read_bool(KF_Y_MODE_PROBS[1]).zero?
           DC_PRED
-        elsif bd.read_bool(KF_Y_MODE_PROBS[2]) == 0
+        elsif bd.read_bool(KF_Y_MODE_PROBS[2]).zero?
           V_PRED
-        elsif bd.read_bool(KF_Y_MODE_PROBS[3]) == 0
+        elsif bd.read_bool(KF_Y_MODE_PROBS[3]).zero?
           H_PRED
         else
           TM_PRED
@@ -227,11 +224,11 @@ module Pura
       end
 
       def read_kf_uv_mode(bd)
-        if bd.read_bool(KF_UV_MODE_PROBS[0]) == 0
+        if bd.read_bool(KF_UV_MODE_PROBS[0]).zero?
           DC_PRED
-        elsif bd.read_bool(KF_UV_MODE_PROBS[1]) == 0
+        elsif bd.read_bool(KF_UV_MODE_PROBS[1]).zero?
           V_PRED
-        elsif bd.read_bool(KF_UV_MODE_PROBS[2]) == 0
+        elsif bd.read_bool(KF_UV_MODE_PROBS[2]).zero?
           H_PRED
         else
           TM_PRED
@@ -266,7 +263,7 @@ module Pura
         end
       end
 
-      def decode_macroblock(tbd, mb_row, mb_col, y_mode, uv_mode,
+      def decode_macroblock(tbd, mb_row, mb_col, _y_mode, _uv_mode,
                             y_buf, u_buf, v_buf, y_stride, uv_stride)
         # Decode Y blocks (4x4 grid = 16 blocks)
         y_coeffs = Array.new(16) { decode_block_coeffs(tbd, 0) }
@@ -289,11 +286,11 @@ module Pura
         # Simple DC prediction for Y (use 128 as predictor)
         4.times do |by|
           4.times do |bx|
-            block = y_pixels[by * 4 + bx]
+            block = y_pixels[(by * 4) + bx]
             16.times do |i|
-              px = base_x + bx * 4 + (i % 4)
-              py = base_y + by * 4 + (i / 4)
-              y_buf[py * y_stride + px] = (128 + block[i]).clamp(0, 255)
+              px = base_x + (bx * 4) + (i % 4)
+              py = base_y + (by * 4) + (i / 4)
+              y_buf[(py * y_stride) + px] = (128 + block[i]).clamp(0, 255)
             end
           end
         end
@@ -303,13 +300,13 @@ module Pura
         uv_base_x = mb_col * 8
         2.times do |by|
           2.times do |bx|
-            u_block = u_pixels[by * 2 + bx]
-            v_block = v_pixels[by * 2 + bx]
+            u_block = u_pixels[(by * 2) + bx]
+            v_block = v_pixels[(by * 2) + bx]
             16.times do |i|
-              px = uv_base_x + bx * 4 + (i % 4)
-              py = uv_base_y + by * 4 + (i / 4)
-              u_buf[py * uv_stride + px] = (128 + u_block[i]).clamp(0, 255)
-              v_buf[py * uv_stride + px] = (128 + v_block[i]).clamp(0, 255)
+              px = uv_base_x + (bx * 4) + (i % 4)
+              py = uv_base_y + (by * 4) + (i / 4)
+              u_buf[(py * uv_stride) + px] = (128 + u_block[i]).clamp(0, 255)
+              v_buf[(py * uv_stride) + px] = (128 + v_block[i]).clamp(0, 255)
             end
           end
         end
@@ -320,37 +317,38 @@ module Pura
         i = 0
         while i < 16
           # Simplified: read token
-          ctx = i == 0 ? 0 : 1
-          band = i > 0 ? ([i - 1, 7].min) : 0
+          ctx = i.zero? ? 0 : 1
+          band = i.positive? ? [i - 1, 7].min : 0
           probs = @coeff_probs[plane.clamp(0, 3)][band][ctx]
 
           # DCT_0 (zero token)?
-          if tbd.read_bool(probs[0]) == 0
+          if tbd.read_bool(probs[0]).zero?
             # If first coeff and it's 0, check for EOB
-            if i > 0
-              break  # EOB
+            if i.positive?
+              break # EOB
             end
+
             i += 1
             next
           end
 
           # Non-zero token
-          if tbd.read_bool(probs[1]) == 0
-            # DCT_1
-            coeffs[i] = 1
-          elsif tbd.read_bool(probs[2]) == 0
-            # DCT_2
-            coeffs[i] = 2
-          elsif tbd.read_bool(probs[3]) == 0
-            # DCT_3
-            coeffs[i] = 3
-          elsif tbd.read_bool(probs[4]) == 0
-            # DCT_4
-            coeffs[i] = 4
-          else
-            # Larger value — simplified
-            coeffs[i] = 5 + tbd.read_literal(3)
-          end
+          coeffs[i] = if tbd.read_bool(probs[1]).zero?
+                        # DCT_1
+                        1
+                      elsif tbd.read_bool(probs[2]).zero?
+                        # DCT_2
+                        2
+                      elsif tbd.read_bool(probs[3]).zero?
+                        # DCT_3
+                        3
+                      elsif tbd.read_bool(probs[4]).zero?
+                        # DCT_4
+                        4
+                      else
+                        # Larger value — simplified
+                        5 + tbd.read_literal(3)
+                      end
 
           # Sign bit
           coeffs[i] = -coeffs[i] if tbd.read_bool(128) == 1
@@ -376,28 +374,28 @@ module Pura
         # Row pass
         temp = Array.new(16, 0)
         4.times do |row|
-          a = input[row * 4 + 0] + input[row * 4 + 2]
-          b = input[row * 4 + 0] - input[row * 4 + 2]
-          c = (input[row * 4 + 1] * 35468 >> 16) - (input[row * 4 + 3] * 85627 >> 16)
-          d = (input[row * 4 + 1] * 85627 >> 16) + (input[row * 4 + 3] * 35468 >> 16)
+          a = input[(row * 4) + 0] + input[(row * 4) + 2]
+          b = input[(row * 4) + 0] - input[(row * 4) + 2]
+          c = ((input[(row * 4) + 1] * 35_468) >> 16) - ((input[(row * 4) + 3] * 85_627) >> 16)
+          d = ((input[(row * 4) + 1] * 85_627) >> 16) + ((input[(row * 4) + 3] * 35_468) >> 16)
 
-          temp[row * 4 + 0] = a + d
-          temp[row * 4 + 1] = b + c
-          temp[row * 4 + 2] = b - c
-          temp[row * 4 + 3] = a - d
+          temp[(row * 4) + 0] = a + d
+          temp[(row * 4) + 1] = b + c
+          temp[(row * 4) + 2] = b - c
+          temp[(row * 4) + 3] = a - d
         end
 
         # Column pass
         4.times do |col|
-          a = temp[0 * 4 + col] + temp[2 * 4 + col]
-          b = temp[0 * 4 + col] - temp[2 * 4 + col]
-          c = (temp[1 * 4 + col] * 35468 >> 16) - (temp[3 * 4 + col] * 85627 >> 16)
-          d = (temp[1 * 4 + col] * 85627 >> 16) + (temp[3 * 4 + col] * 35468 >> 16)
+          a = temp[(0 * 4) + col] + temp[(2 * 4) + col]
+          b = temp[(0 * 4) + col] - temp[(2 * 4) + col]
+          c = ((temp[(1 * 4) + col] * 35_468) >> 16) - ((temp[(3 * 4) + col] * 85_627) >> 16)
+          d = ((temp[(1 * 4) + col] * 85_627) >> 16) + ((temp[(3 * 4) + col] * 35_468) >> 16)
 
-          output[0 * 4 + col] = (a + d + 4) >> 3
-          output[1 * 4 + col] = (b + c + 4) >> 3
-          output[2 * 4 + col] = (b - c + 4) >> 3
-          output[3 * 4 + col] = (a - d + 4) >> 3
+          output[(0 * 4) + col] = (a + d + 4) >> 3
+          output[(1 * 4) + col] = (b + c + 4) >> 3
+          output[(2 * 4) + col] = (b - c + 4) >> 3
+          output[(3 * 4) + col] = (a - d + 4) >> 3
         end
 
         output
@@ -408,17 +406,17 @@ module Pura
 
         height.times do |row|
           width.times do |col|
-            y = y_buf[row * y_stride + col]
-            u = u_buf[(row / 2) * uv_stride + (col / 2)]
-            v = v_buf[(row / 2) * uv_stride + (col / 2)]
+            y = y_buf[(row * y_stride) + col]
+            u = u_buf[((row / 2) * uv_stride) + (col / 2)]
+            v = v_buf[((row / 2) * uv_stride) + (col / 2)]
 
             c = y - 16
             d = u - 128
             e = v - 128
 
-            r = ((298 * c + 409 * e + 128) >> 8).clamp(0, 255)
-            g = ((298 * c - 100 * d - 208 * e + 128) >> 8).clamp(0, 255)
-            b = ((298 * c + 516 * d + 128) >> 8).clamp(0, 255)
+            r = (((298 * c) + (409 * e) + 128) >> 8).clamp(0, 255)
+            g = (((298 * c) - (100 * d) - (208 * e) + 128) >> 8).clamp(0, 255)
+            b = (((298 * c) + (516 * d) + 128) >> 8).clamp(0, 255)
 
             pixels << r.chr << g.chr << b.chr
           end

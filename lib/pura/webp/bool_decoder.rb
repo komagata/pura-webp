@@ -55,6 +55,7 @@ module Pura
           idx += read_bool(probs[idx >> 1])
           val = tree[idx]
           return val if val <= 0
+
           idx = val
         end
       end
@@ -67,11 +68,10 @@ module Pura
           if @pos < @end_pos
             @value = (@value << 8) | @data.getbyte(@pos)
             @pos += 1
-            @bits_left += 8
           else
             @value <<= 8
-            @bits_left += 8
           end
+          @bits_left += 8
         end
         @bits_left -= 8 # We work with bits_left relative to range position
       end
@@ -81,14 +81,14 @@ module Pura
           @range <<= 1
           @bits_left -= 1
 
-          if @bits_left < 0
-            @bits_left += 8
-            if @pos < @end_pos
-              @value = (@value << 8) | @data.getbyte(@pos)
-              @pos += 1
-            else
-              @value <<= 8
-            end
+          next unless @bits_left.negative?
+
+          @bits_left += 8
+          if @pos < @end_pos
+            @value = (@value << 8) | @data.getbyte(@pos)
+            @pos += 1
+          else
+            @value <<= 8
           end
         end
       end
