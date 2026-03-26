@@ -76,25 +76,18 @@ module Pura
           blues[i] = pixels.getbyte(offset + 2)
         end
 
-        # Find unique values per channel
-        green_uniq = greens.uniq.sort
-        red_uniq = reds.uniq.sort
-        blue_uniq = blues.uniq.sort
+        # Build histograms
+        green_hist = Array.new(280, 0)
+        red_hist = Array.new(256, 0)
+        blue_hist = Array.new(256, 0)
+        greens.each { |v| green_hist[v] += 1 }
+        reds.each { |v| red_hist[v] += 1 }
+        blues.each { |v| blue_hist[v] += 1 }
 
-        # For channels with >2 unique values, quantize to 2 most frequent
-        # (VP8L simple code supports max 2 symbols; our normal huffman has bugs)
-        greens = quantize_channel(greens, green_uniq) if green_uniq.size > 2
-        reds = quantize_channel(reds, red_uniq) if red_uniq.size > 2
-        blues = quantize_channel(blues, blue_uniq) if blue_uniq.size > 2
-
-        green_uniq = greens.uniq.sort
-        red_uniq = reds.uniq.sort
-        blue_uniq = blues.uniq.sort
-
-        # Build lengths for simple codes only (1 or 2 symbols)
-        green_lengths = simple_lengths(green_uniq, 280)
-        red_lengths = simple_lengths(red_uniq, 256)
-        blue_lengths = simple_lengths(blue_uniq, 256)
+        # Build huffman code lengths
+        green_lengths = build_huffman_lengths(green_hist, 280)
+        red_lengths = build_huffman_lengths(red_hist, 256)
+        blue_lengths = build_huffman_lengths(blue_hist, 256)
         alpha_lengths = Array.new(256, 0)
         alpha_lengths[255] = 1
         dist_lengths = Array.new(40, 0)
@@ -180,8 +173,8 @@ module Pura
         # Extract lengths
         assign_depth(nodes[0], 0, lengths)
 
-        # Cap at 15
-        lengths.map! { |l| [l, 15].min }
+        # Enforce max length (15 for data, 7 for CL codes)
+        enforce_max_length(lengths, 15)
         lengths
       end
 
@@ -192,6 +185,36 @@ module Pura
           assign_depth(node[:left], depth + 1, lengths)
           assign_depth(node[:right], depth + 1, lengths)
         end
+      end
+
+      # Enforce max code length while maintaining valid prefix code
+      def enforce_max_length(lengths, max_len)
+        return if lengths.max.to_i <= max_len
+
+        # Collect non-zero lengths with symbols
+        syms = []
+        lengths.each_with_index { |l, s| syms << [l, s] if l > 0 }
+        return if syms.empty?
+
+        # Cap all lengths
+        syms.each { |pair| pair[0] = max_len if pair[0] > max_len }
+
+        # Verify Kraft inequality: sum of 2^(-l) <= 1
+        # Multiply by 2^max_len: sum of 2^(max_len - l) <= 2^max_len
+        kraft_limit = 1 << max_len
+        loop do
+          kraft_sum = syms.sum { |l, _| 1 << (max_len - l) }
+          break if kraft_sum <= kraft_limit
+
+          # Find the longest code and shorten it
+          syms.sort_by! { |l, _| -l }
+          # Take from longest, give to shorter
+          syms[0][0] -= 1 if syms[0][0] > 1
+        end
+
+        # Write back
+        lengths.fill(0)
+        syms.each { |l, s| lengths[s] = l }
       end
 
       # Build canonical huffman codes from lengths
@@ -220,13 +243,18 @@ module Pura
       end
 
       def emit_code(bw, codes, sym)
-        return if codes.size <= 1  # single-symbol table: 0 bits needed
+        if codes.size <= 1
+          # Single-symbol simple code: 0 bits needed
+          return
+        end
 
         entry = codes[sym]
         return unless entry
 
         code, len = entry
-        # VP8L: huffman codes are stored with bits reversed (MSB of code goes to LSB of stream)
+        return if len == 0  # singleton in normal huffman
+
+        # VP8L: huffman codes written MSB first
         len.times do |i|
           bw.write_bits((code >> (len - 1 - i)) & 1, 1)
         end
@@ -277,8 +305,9 @@ module Pura
       def write_normal_code_lengths(bw, lengths)
         bw.write_bits(0, 1)  # is_simple = false
 
-        # Trim trailing zeros
-        num_symbols = (lengths.rindex { |l| l > 0 } || 0) + 1
+        # Must cover all symbols in the alphabet (lengths.size)
+        # The decoder reads alphabet_size code lengths
+        num_symbols = lengths.size
 
         # Code length alphabet: 0-15 literal lengths, 16=repeat, 17=zero run 3-10, 18=zero run 11-138
         # VP8L code length code order
@@ -294,7 +323,7 @@ module Pura
         # Build code lengths for code length alphabet
         cl_lengths = build_huffman_lengths(cl_hist, 19)
         # Code length codes max length is 7 (stored in 3 bits)
-        cl_lengths.map! { |l| [l, 7].min }
+        enforce_max_length(cl_lengths, 7)
 
         # Determine num_code_length_codes (at least 4)
         num_cl = 4
@@ -354,17 +383,18 @@ module Pura
             result << [val, 0, 0]
             i += 1
             # Count repeats of same value
-            run = 0
-            run += 1 while i + run < num_symbols && lengths[i + run] == val
-            while run >= 3
-              extra = [run - 3, 3].min
+            total_run = 0
+            total_run += 1 while i + total_run < num_symbols && lengths[i + total_run] == val
+            remaining = total_run
+            while remaining >= 3
+              extra = [remaining - 3, 3].min
               result << [16, 2, extra]
-              run -= 3 + extra
+              remaining -= 3 + extra
             end
-            run.times do
+            remaining.times do
               result << [val, 0, 0]
             end
-            i += run
+            i += total_run
           end
         end
         result

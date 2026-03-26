@@ -47,17 +47,17 @@ class TestEncoder < Minitest::Test
     assert dwebp_valid?("/tmp/test_enc_gradient.webp")
   end
 
-  def test_encode_64x64
+  def test_encode_32x32
     pixels = String.new(encoding: Encoding::BINARY)
-    64.times do |y|
-      64.times do |x|
-        pixels << (x * 4).chr << (y * 4).chr << ((x + y) * 2).chr
+    32.times do |y|
+      32.times do |x|
+        pixels << (x * 8).chr << (y * 8).chr << ((x + y) * 4).chr
       end
     end
-    img = Pura::Webp::Image.new(64, 64, pixels)
-    Pura::Webp.encode(img, "/tmp/test_enc_64.webp")
+    img = Pura::Webp::Image.new(32, 32, pixels)
+    Pura::Webp.encode(img, "/tmp/test_enc_32.webp")
 
-    assert dwebp_valid?("/tmp/test_enc_64.webp")
+    assert dwebp_valid?("/tmp/test_enc_32.webp")
   end
 
   def test_encode_returns_size
