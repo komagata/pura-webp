@@ -13,9 +13,7 @@ Gem::Specification.new do |spec|
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.0.0"
 
-  spec.files = Dir["lib/**/*.rb", "bin/*", "LICENSE", "README.md"]
-  spec.bindir = "bin"
-  spec.executables = ["pura-webp"]
+  spec.files = Dir["lib/**/*.rb", "LICENSE", "README.md"]
 
   spec.metadata["homepage_uri"] = spec.homepage
   spec.metadata["source_code_uri"] = spec.homepage
