@@ -153,6 +153,10 @@ module Pura
           @left_b_modes = Array.new(4, B_DC_PRED)
 
           mb_cols.times do |mb_col|
+            # Per-MB header order (libwebp ParseIntraMode): segment, skip,
+            # Y mode (is_i4x4 + 16x16 OR B_PRED sub-block modes), UV mode.
+            segment = read_mb_segment(bd)
+            @dequant = @dequant_matrices[segment]
             skip = @mb_no_skip_coeff ? (bd.read_bool(@prob_skip_false) == 1) : false
             y_mode = read_kf_y_mode(bd)
             b_modes = y_mode == B_PRED ? read_b_modes(bd, mb_col) : nil
@@ -223,15 +227,22 @@ module Pura
         bd.read_flag # color_space (always 0)
         bd.read_flag # clamping_type
 
-        segmentation_enabled = bd.read_flag
-        if segmentation_enabled
-          update_mb_seg_map = bd.read_flag
-          if bd.read_flag
-            bd.read_flag
-            4.times { bd.read_signed(7) if bd.read_flag }
-            4.times { bd.read_signed(6) if bd.read_flag }
+        @use_segment = bd.read_flag
+        @update_mb_seg_map = false
+        @segment_quantizer = [0, 0, 0, 0]
+        @segment_filter = [0, 0, 0, 0]
+        @segment_absolute_delta = false
+        @segment_probs = [255, 255, 255]
+        if @use_segment
+          @update_mb_seg_map = bd.read_flag
+          if bd.read_flag # update_segment_feature_data
+            @segment_absolute_delta = bd.read_flag
+            4.times { |s| @segment_quantizer[s] = bd.read_flag ? bd.read_signed(7) : 0 }
+            4.times { |s| @segment_filter[s] = bd.read_flag ? bd.read_signed(6) : 0 }
           end
-          3.times { bd.read_literal(8) if bd.read_flag } if update_mb_seg_map
+          if @update_mb_seg_map
+            3.times { |s| @segment_probs[s] = bd.read_flag ? bd.read_literal(8) : 255 }
+          end
         end
 
         bd.read_flag
@@ -246,13 +257,13 @@ module Pura
         num_log2_partitions = bd.read_literal(2)
         raise DecodeError, "multiple token partitions not supported" if num_log2_partitions != 0
 
-        y_ac_qi = bd.read_literal(7)
-        y_dc_delta  = bd.read_flag ? bd.read_signed(4) : 0
-        y2_dc_delta = bd.read_flag ? bd.read_signed(4) : 0
-        y2_ac_delta = bd.read_flag ? bd.read_signed(4) : 0
-        uv_dc_delta = bd.read_flag ? bd.read_signed(4) : 0
-        uv_ac_delta = bd.read_flag ? bd.read_signed(4) : 0
-        @dequant = build_dequant(y_ac_qi, y_dc_delta, y2_dc_delta, y2_ac_delta, uv_dc_delta, uv_ac_delta)
+        @base_y_ac_qi = bd.read_literal(7)
+        @y_dc_delta  = bd.read_flag ? bd.read_signed(4) : 0
+        @y2_dc_delta = bd.read_flag ? bd.read_signed(4) : 0
+        @y2_ac_delta = bd.read_flag ? bd.read_signed(4) : 0
+        @uv_dc_delta = bd.read_flag ? bd.read_signed(4) : 0
+        @uv_ac_delta = bd.read_flag ? bd.read_signed(4) : 0
+        @dequant_matrices = (0..3).map { |seg| build_dequant_for_segment(seg) }
 
         bd.read_flag # refresh_entropy_probs
 
@@ -261,6 +272,19 @@ module Pura
 
         @mb_no_skip_coeff = bd.read_flag
         @prob_skip_false  = @mb_no_skip_coeff ? bd.read_literal(8) : 0
+      end
+
+      def build_dequant_for_segment(segment)
+        qi = if @use_segment
+               if @segment_absolute_delta
+                 @segment_quantizer[segment]
+               else
+                 @base_y_ac_qi + @segment_quantizer[segment]
+               end
+             else
+               @base_y_ac_qi
+             end
+        build_dequant(qi, @y_dc_delta, @y2_dc_delta, @y2_ac_delta, @uv_dc_delta, @uv_ac_delta)
       end
 
       def build_dequant(y_ac_qi, y_dc_d, y2_dc_d, y2_ac_d, uv_dc_d, uv_ac_d)
@@ -272,9 +296,25 @@ module Pura
           y_ac:  ac[qi],
           y2_dc: dc[(qi + y2_dc_d).clamp(0, 127)] * 2,
           y2_ac: [ac[(qi + y2_ac_d).clamp(0, 127)] * 155 / 100, 8].max,
-          uv_dc: dc[(qi + uv_dc_d).clamp(0, 127)],
+          # UV DC uses a tighter upper bound (117, not 127). The reference
+          # RFC 6386 decoder's dequant_init function clamps to 132 directly,
+          # which equals dequantTableDC[117]; libwebp and golang.org/x/image
+          # both use the clamp-at-117 formulation.
+          uv_dc: dc[(qi + uv_dc_d).clamp(0, 117)],
           uv_ac: ac[(qi + uv_ac_d).clamp(0, 127)]
         }
+      end
+
+      # Reads the per-MB segment ID (0..3) from the partition-0 bool decoder.
+      # Per libwebp ParseIntraMode(): uses a 3-branch hardcoded tree.
+      def read_mb_segment(bd)
+        return 0 unless @use_segment && @update_mb_seg_map
+
+        if bd.read_bool(@segment_probs[0]).zero?
+          bd.read_bool(@segment_probs[1])        # -> 0 or 1
+        else
+          bd.read_bool(@segment_probs[2]) + 2    # -> 2 or 3
+        end
       end
 
       def parse_token_prob_updates(bd)
@@ -426,7 +466,12 @@ module Pura
           end
 
           value = read_nonzero_token(bd, probs)
-          value = -value if bd.read_sign_bit == 1
+          # Use libwebp's optimized sign read, which is equivalent in bit
+          # output to read_bool(128) but advances state differently (no
+          # renormalization shift; preserves range with |=1). Mixing this
+          # with ordinary read_bool without exact state-match produces
+          # drift over thousands of reads.
+          value = bd.read_signed_value(value)
           coeffs[VP8Tables::ZIGZAG[pos]] = value
           any_nz = true
           prev_ctx = value.abs == 1 ? 1 : 2
