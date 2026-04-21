@@ -2,41 +2,45 @@
 
 module Pura
   module Webp
+    # VP8 boolean (arithmetic) decoder. Faithful to the reference pseudocode
+    # in RFC 6386 §7, which treats `value` as a running 8-bit window with one
+    # new stream bit shifted in per normalize step. An optimized formulation
+    # would precompute a 16-bit window; we prefer the RFC form for clarity —
+    # a decode is bounded by the compressed frame size and Ruby is the
+    # bottleneck anyway.
     class BoolDecoder
       def initialize(data, offset = 0, size = nil)
         @data = data
         @pos = offset
         @end_pos = size ? offset + size : data.bytesize
-
         @range = 255
         @value = 0
-        @bits_left = 0
-
-        load_initial
+        @bits_in_value = 0 # number of stream bits currently in @value (0..8)
+        # Prime @value with 8 bits per §7.
+        8.times { @value = (@value << 1) | read_bit }
       end
 
       def read_bool(prob)
         split = 1 + (((@range - 1) * prob) >> 8)
-        big_split = split << @bits_left
-
-        if @value >= big_split
-          @range -= split
-          @value -= big_split
-          bit = 1
-        else
+        if @value < split
           @range = split
           bit = 0
+        else
+          @range -= split
+          @value -= split
+          bit = 1
         end
 
-        normalize
+        while @range < 128
+          @range <<= 1
+          @value = (@value << 1) | read_bit
+        end
         bit
       end
 
       def read_literal(n)
         val = 0
-        n.times do
-          val = (val << 1) | read_bool(128)
-        end
+        n.times { val = (val << 1) | read_bool(128) }
         val
       end
 
@@ -49,48 +53,17 @@ module Pura
         read_flag ? -val : val
       end
 
-      def read_tree(tree, probs)
-        idx = 0
-        loop do
-          idx += read_bool(probs[idx >> 1])
-          val = tree[idx]
-          return val if val <= 0
-
-          idx = val
-        end
-      end
-
       private
 
-      def load_initial
-        # Load enough bytes to fill value register
-        4.times do
-          if @pos < @end_pos
-            @value = (@value << 8) | @data.getbyte(@pos)
-            @pos += 1
-          else
-            @value <<= 8
-          end
-          @bits_left += 8
+      # Read one bit from the stream, MSB first within each byte.
+      def read_bit
+        if @bits_in_value.zero?
+          @current_byte = @pos < @end_pos ? @data.getbyte(@pos) : 0
+          @pos += 1
+          @bits_in_value = 8
         end
-        @bits_left -= 8 # We work with bits_left relative to range position
-      end
-
-      def normalize
-        while @range < 128
-          @range <<= 1
-          @bits_left -= 1
-
-          next unless @bits_left.negative?
-
-          @bits_left += 8
-          if @pos < @end_pos
-            @value = (@value << 8) | @data.getbyte(@pos)
-            @pos += 1
-          else
-            @value <<= 8
-          end
-        end
+        @bits_in_value -= 1
+        (@current_byte >> @bits_in_value) & 1
       end
     end
   end

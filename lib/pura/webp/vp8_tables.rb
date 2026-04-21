@@ -213,8 +213,14 @@ module Pura
       ].freeze
 
       # Default coefficient probabilities [block_type][band][ctx][prob]
-      # From RFC 6386, Section 13.5
-      # Block types: 0=Y_after_Y2, 1=Y_no_Y2, 2=UV, 3=Y2
+      # From RFC 6386 §13.5. Block-type ordering follows libwebp (which is
+      # what WebP files are encoded against):
+      #   0 = Y-after-Y2   (AC-only Y sub-blocks following a Y2)
+      #   1 = Y2           (2nd-order DC block for non-B_PRED macroblocks)
+      #   2 = UV           (chroma)
+      #   3 = Y-no-Y2      (Y sub-blocks for B_PRED macroblocks — full DC+AC)
+      # libvpx docs swap types 1 and 3. Use the decoder.rb constants, not raw
+      # indices, and you cannot mix them up.
       DEFAULT_COEFF_PROBS = [
         # Block type 0: Y after Y2
         [
@@ -477,18 +483,9 @@ module Pura
       ].freeze
 
       def self.default_coeff_probs
-        # Deep copy of COEFF_UPDATE_PROBS structure as default token probs
-        # Using the standard default coefficient probabilities
-        [
-          # Type 0: Y after Y2
-          Array.new(8) { Array.new(3) { [128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128] } },
-          # Type 1: Y2
-          Array.new(8) { Array.new(3) { [128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128] } },
-          # Type 2: UV
-          Array.new(8) { Array.new(3) { [128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128] } },
-          # Type 3: Y
-          Array.new(8) { Array.new(3) { [128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128] } }
-        ]
+        # Deep copy of the canonical RFC 6386 §13.5 default coefficient probabilities.
+        # Callers mutate the result during frame header decoding (prob updates).
+        DEFAULT_COEFF_PROBS.map { |bt| bt.map { |band| band.map(&:dup) } }
       end
     end
   end
