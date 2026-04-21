@@ -53,6 +53,13 @@ module Pura
         read_flag ? -val : val
       end
 
+      # Optimized "sign bit" read matching libwebp's VP8GetSigned semantics.
+      # Functionally equivalent to read_bool(128) but uses the simpler
+      # split = range >> 1 formulation per libwebp's optimization.
+      def read_sign_bit
+        read_bool(128)
+      end
+
       private
 
       # Read one bit from the stream, MSB first within each byte.

@@ -426,7 +426,7 @@ module Pura
           end
 
           value = read_nonzero_token(bd, probs)
-          value = -value if bd.read_bool(128) == 1
+          value = -value if bd.read_sign_bit == 1
           coeffs[VP8Tables::ZIGZAG[pos]] = value
           any_nz = true
           prev_ctx = value.abs == 1 ? 1 : 2
@@ -716,13 +716,32 @@ module Pura
         left_exists  = mb_col.positive? || sb_col.positive?
 
         t = Array.new(8, 127)
+        l = Array.new(4, 129)
+
         if above_exists
-          8.times { |i| t[i] = buf[((y - 1) * stride) + x + i] }
-          ar_avail = sub_block_above_right_available(mb_row, mb_col, mb_cols, sb_row, sb_col)
-          4.times { |i| t[4 + i] = t[3] } unless ar_avail
+          # t[0..3]: the row above this 4x4 block. Always within the MB-above
+          # (sb_row==0) or the previously-decoded sub-block row (sb_row>0).
+          4.times { |i| t[i] = buf[((y - 1) * stride) + x + i] }
+
+          # t[4..7]: "above-right" 4 pixels. For sb_col<3 these are the next
+          # 4 cols of the row above (still within MB-above / current MB).
+          # For sb_col==3 the x+4..x+7 read crosses the MB boundary and
+          # would hit undecoded adjacent-MB pixels — instead VP8 specifies
+          # that the above-right pixels come from the MB-above-right's
+          # bottom row (per sb_row, duplicated down — see libwebp
+          # ReconstructRow()), or a duplicate of t[3] on the rightmost MB.
+          if sb_col < 3
+            4.times { |i| t[4 + i] = buf[((y - 1) * stride) + x + 4 + i] }
+          elsif mb_row.positive? && mb_col + 1 < mb_cols
+            ar_y = (mb_row * 16) - 1
+            ar_x = (mb_col + 1) * 16
+            4.times { |i| t[4 + i] = buf[(ar_y * stride) + ar_x + i] }
+          else
+            # Rightmost MB, or mb_row==0 with sb_row>0: duplicate t[3].
+            4.times { |i| t[4 + i] = t[3] }
+          end
         end
 
-        l = Array.new(4, 129)
         if left_exists
           4.times { |i| l[i] = buf[((y + i) * stride) + x - 1] }
         end
@@ -799,91 +818,53 @@ module Pura
         end
       end
 
-      def predict_b_vr(buf, x, y, stride, t, l, tl)
-        # Vertical-right: layout per RFC 6386 §12.3
-        layout = [
-          [:avg2_tl_t0,  :avg2_t0_t1,  :avg2_t1_t2,  :avg2_t2_t3],
-          [:avg3_l0_tl_t0, :avg3_tl_t0_t1, :avg3_t0_t1_t2, :avg3_t1_t2_t3],
-          [:avg2_l0_tl,  :avg2_tl_t0,  :avg2_t0_t1,  :avg2_t1_t2],
-          [:avg3_l1_l0_tl, :avg3_l0_tl_t0, :avg3_tl_t0_t1, :avg3_t0_t1_t2]
-        ]
-        4.times do |yi|
-          4.times do |xi|
-            buf[((y + yi) * stride) + x + xi] = vr_pixel(layout[yi][xi], t, l, tl)
-          end
-        end
+      # Helpers matching libwebp's AVG2 / AVG3 macros.
+      def avg2(p, q)
+        (p + q + 1) >> 1
       end
 
-      def vr_pixel(sym, t, l, tl)
-        case sym
-        when :avg2_tl_t0  then (tl + t[0] + 1) >> 1
-        when :avg2_t0_t1  then (t[0] + t[1] + 1) >> 1
-        when :avg2_t1_t2  then (t[1] + t[2] + 1) >> 1
-        when :avg2_t2_t3  then (t[2] + t[3] + 1) >> 1
-        when :avg2_l0_tl  then (l[0] + tl + 1) >> 1
-        when :avg3_l0_tl_t0  then (l[0] + (2 * tl) + t[0] + 2) >> 2
-        when :avg3_tl_t0_t1  then (tl + (2 * t[0]) + t[1] + 2) >> 2
-        when :avg3_t0_t1_t2  then (t[0] + (2 * t[1]) + t[2] + 2) >> 2
-        when :avg3_t1_t2_t3  then (t[1] + (2 * t[2]) + t[3] + 2) >> 2
-        when :avg3_l1_l0_tl  then (l[1] + (2 * l[0]) + tl + 2) >> 2
-        end
+      def avg3(p, q, r)
+        (p + (2 * q) + r + 2) >> 2
+      end
+
+      # VR4 / VL4 / HD4: layouts transcribed from libwebp src/dsp/dec.c.
+      # Using simple inline grids makes it easy to diff against the C source.
+
+      def predict_b_vr(buf, x, y, stride, t, l, tl)
+        grid = [
+          [avg2(tl, t[0]),        avg2(t[0], t[1]),       avg2(t[1], t[2]),       avg2(t[2], t[3])],
+          [avg3(l[0], tl, t[0]),  avg3(tl, t[0], t[1]),   avg3(t[0], t[1], t[2]), avg3(t[1], t[2], t[3])],
+          [avg3(l[1], l[0], tl),  avg2(tl, t[0]),         avg2(t[0], t[1]),       avg2(t[1], t[2])],
+          [avg3(l[2], l[1], l[0]), avg3(l[0], tl, t[0]),  avg3(tl, t[0], t[1]),   avg3(t[0], t[1], t[2])]
+        ]
+        write_grid(buf, x, y, stride, grid)
       end
 
       def predict_b_vl(buf, x, y, stride, t)
-        layout = [
-          [:avg2_t0_t1, :avg2_t1_t2, :avg2_t2_t3, :avg2_t3_t4],
-          [:avg3_t0_t1_t2, :avg3_t1_t2_t3, :avg3_t2_t3_t4, :avg3_t3_t4_t5],
-          [:avg2_t1_t2, :avg2_t2_t3, :avg2_t3_t4, :avg2_t4_t5],
-          [:avg3_t1_t2_t3, :avg3_t2_t3_t4, :avg3_t3_t4_t5, :avg3_t4_t5_t6]
+        grid = [
+          [avg2(t[0], t[1]),       avg2(t[1], t[2]),       avg2(t[2], t[3]),       avg2(t[3], t[4])],
+          [avg3(t[0], t[1], t[2]), avg3(t[1], t[2], t[3]), avg3(t[2], t[3], t[4]), avg3(t[3], t[4], t[5])],
+          [avg2(t[1], t[2]),       avg2(t[2], t[3]),       avg2(t[3], t[4]),       avg3(t[4], t[5], t[6])],
+          [avg3(t[1], t[2], t[3]), avg3(t[2], t[3], t[4]), avg3(t[3], t[4], t[5]), avg3(t[5], t[6], t[7])]
         ]
-        4.times do |yi|
-          4.times do |xi|
-            buf[((y + yi) * stride) + x + xi] = vl_pixel(layout[yi][xi], t)
-          end
-        end
-      end
-
-      def vl_pixel(sym, t)
-        case sym
-        when :avg2_t0_t1 then (t[0] + t[1] + 1) >> 1
-        when :avg2_t1_t2 then (t[1] + t[2] + 1) >> 1
-        when :avg2_t2_t3 then (t[2] + t[3] + 1) >> 1
-        when :avg2_t3_t4 then (t[3] + t[4] + 1) >> 1
-        when :avg2_t4_t5 then (t[4] + t[5] + 1) >> 1
-        when :avg3_t0_t1_t2 then (t[0] + (2 * t[1]) + t[2] + 2) >> 2
-        when :avg3_t1_t2_t3 then (t[1] + (2 * t[2]) + t[3] + 2) >> 2
-        when :avg3_t2_t3_t4 then (t[2] + (2 * t[3]) + t[4] + 2) >> 2
-        when :avg3_t3_t4_t5 then (t[3] + (2 * t[4]) + t[5] + 2) >> 2
-        when :avg3_t4_t5_t6 then (t[4] + (2 * t[5]) + t[6] + 2) >> 2
-        end
+        write_grid(buf, x, y, stride, grid)
       end
 
       def predict_b_hd(buf, x, y, stride, t, l, tl)
-        layout = [
-          [:avg2_l0_tl, :avg3_l1_l0_tl, :avg3_l0_tl_t0, :avg3_tl_t0_t1],
-          [:avg2_l1_l0, :avg3_l2_l1_l0, :avg2_l0_tl,    :avg3_l1_l0_tl],
-          [:avg2_l2_l1, :avg3_l3_l2_l1, :avg2_l1_l0,    :avg3_l2_l1_l0],
-          [:avg2_l3_l2, :avg3_l3_l3_l2, :avg2_l2_l1,    :avg3_l3_l2_l1]
+        grid = [
+          [avg2(l[0], tl),        avg3(l[0], tl, t[0]),  avg3(tl, t[0], t[1]),   avg3(t[0], t[1], t[2])],
+          [avg2(l[1], l[0]),      avg3(l[1], l[0], tl),  avg2(l[0], tl),         avg3(l[0], tl, t[0])],
+          [avg2(l[2], l[1]),      avg3(l[2], l[1], l[0]), avg2(l[1], l[0]),      avg3(l[1], l[0], tl)],
+          [avg2(l[3], l[2]),      avg3(l[3], l[2], l[1]), avg2(l[2], l[1]),      avg3(l[2], l[1], l[0])]
         ]
-        4.times do |yi|
-          4.times do |xi|
-            buf[((y + yi) * stride) + x + xi] = hd_pixel(layout[yi][xi], t, l, tl)
-          end
-        end
+        write_grid(buf, x, y, stride, grid)
       end
 
-      def hd_pixel(sym, t, l, tl)
-        case sym
-        when :avg2_l0_tl then (l[0] + tl + 1) >> 1
-        when :avg2_l1_l0 then (l[1] + l[0] + 1) >> 1
-        when :avg2_l2_l1 then (l[2] + l[1] + 1) >> 1
-        when :avg2_l3_l2 then (l[3] + l[2] + 1) >> 1
-        when :avg3_l1_l0_tl then (l[1] + (2 * l[0]) + tl + 2) >> 2
-        when :avg3_l0_tl_t0 then (l[0] + (2 * tl) + t[0] + 2) >> 2
-        when :avg3_tl_t0_t1 then (tl + (2 * t[0]) + t[1] + 2) >> 2
-        when :avg3_l2_l1_l0 then (l[2] + (2 * l[1]) + l[0] + 2) >> 2
-        when :avg3_l3_l2_l1 then (l[3] + (2 * l[2]) + l[1] + 2) >> 2
-        when :avg3_l3_l3_l2 then (l[3] + (2 * l[3]) + l[2] + 2) >> 2
+      def write_grid(buf, x, y, stride, grid)
+        4.times do |yi|
+          4.times do |xi|
+            buf[((y + yi) * stride) + x + xi] = grid[yi][xi]
+          end
         end
       end
 
@@ -909,13 +890,6 @@ module Pura
         end
       end
 
-      def sub_block_above_right_available(mb_row, mb_col, mb_cols, sb_row, sb_col)
-        return false if sb_col == 3
-        return true if sb_row.positive?
-        return false if mb_row.zero?
-
-        mb_col + 1 < mb_cols
-      end
 
       # ---- YUV 4:2:0 -> RGB (BT.601) ----
 
