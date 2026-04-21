@@ -2,14 +2,9 @@
 
 module Pura
   module Webp
-    # VP8 boolean decoder — direct port of golang.org/x/image/vp8/partition.go.
-    # Uses the libwebp-style optimization with precomputed shift / range tables
-    # (lutShift and lutRangeM1) to normalize the range after each bit read in
-    # O(1) instead of O(log range). Matching Go's/libwebp's exact internal
-    # state (rangeM1, bits, nBits) is what lets us decode the same bitstream
-    # identically across thousands of reads — the simpler RFC 6386 §7 form is
-    # mathematically equivalent for well-formed streams but accumulates
-    # subtle state-representation drift with optimized sign bits.
+    # VP8 arithmetic bit decoder. Direct port of golang.org/x/image/vp8/partition.go
+    # (BSD-3-Clause). Follows libwebp's optimized formulation with precomputed
+    # shift/range lookup tables so normalization is O(1) per bit.
     class BoolDecoder
       LUT_SHIFT = [
         7, 6, 6, 5, 5, 5, 5, 4, 4, 4, 4, 4, 4, 4, 4,
@@ -36,27 +31,38 @@ module Pura
         223, 225, 227, 229, 231, 233, 235, 237, 239, 241, 243, 245, 247, 249, 251, 253
       ].freeze
 
-      def initialize(data, offset = 0, size = nil)
-        @data = data
-        @pos = offset
-        @end_pos = size ? offset + size : data.bytesize
-        @range_m1 = 254         # actual_range - 1; starts at 255 - 1
-        @bits = 0                # buffered stream bits (high end)
-        @n_bits = 0              # how many valid bits in @bits
+      UNIFORM_PROB = 128
+
+      attr_reader :unexpected_eof
+
+      def init(buf)
+        @buf = buf
+        @r = 0
+        @range_m1 = 254
+        @bits = 0
+        @n_bits = 0
+        @unexpected_eof = false
       end
 
-      def read_bool(prob)
+      def initialize(buf = nil)
+        init(buf) if buf
+      end
+
+      # Reads a single arithmetic-coded bit. Returns true or false (not 0/1).
+      def read_bit(prob)
         if @n_bits < 8
-          if @pos < @end_pos
-            x = @data.getbyte(@pos)
-            @pos += 1
-            @bits |= x << (8 - @n_bits)
+          if @r >= @buf.bytesize
+            @unexpected_eof = true
+            return false
           end
+          x = @buf.getbyte(@r)
+          @bits |= x << (8 - @n_bits)
+          @r += 1
           @n_bits += 8
         end
         split = ((@range_m1 * prob) >> 8) + 1
-        bit = @bits >= (split << 8) ? 1 : 0
-        if bit == 1
+        bit = @bits >= (split << 8)
+        if bit
           @range_m1 -= split
           @bits -= split << 8
         else
@@ -65,31 +71,34 @@ module Pura
         if @range_m1 < 127
           shift = LUT_SHIFT[@range_m1]
           @range_m1 = LUT_RANGE_M1[@range_m1]
-          @bits <<= shift
-          @bits &= 0xFFFFFFFF
+          @bits = (@bits << shift) & 0xFFFFFFFF
           @n_bits -= shift
         end
         bit
       end
 
-      def read_literal(n)
-        val = 0
-        n.times { val = (val << 1) | read_bool(128) }
-        val
+      # Reads an n-bit unsigned integer, MSB first.
+      def read_uint(prob, n)
+        u = 0
+        while n.positive?
+          n -= 1
+          u |= (1 << n) if read_bit(prob)
+        end
+        u
       end
 
-      def read_flag
-        read_bool(128) == 1
+      # Reads an n-bit signed integer: magnitude bits followed by sign bit.
+      def read_int(prob, n)
+        u = read_uint(prob, n)
+        read_bit(prob) ? -u : u
       end
 
-      def read_signed(n)
-        val = read_literal(n)
-        read_flag ? -val : val
-      end
+      # Reads an "optional int": 1 prob-bit flag; if set, read n-bit signed int;
+      # otherwise return 0.
+      def read_optional_int(prob, n)
+        return 0 unless read_bit(prob)
 
-      # Kept for API compatibility with the previous RFC-form decoder.
-      def read_signed_value(v)
-        read_bool(128) == 1 ? -v : v
+        read_int(prob, n)
       end
     end
   end
