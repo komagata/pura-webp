@@ -17,6 +17,7 @@ class TestEncoder < Minitest::Test
   end
 
   def test_encode_two_colors
+    skip "dwebp not installed — install libwebp to run this test" unless dwebp_available?
     pixels = String.new(encoding: Encoding::BINARY)
     4.times do |y|
       4.times do |x|
@@ -35,6 +36,7 @@ class TestEncoder < Minitest::Test
   end
 
   def test_encode_gradient
+    skip "dwebp not installed — install libwebp to run this test" unless dwebp_available?
     pixels = String.new(encoding: Encoding::BINARY)
     16.times do |y|
       16.times do |x|
@@ -48,6 +50,7 @@ class TestEncoder < Minitest::Test
   end
 
   def test_encode_32x32
+    skip "dwebp not installed — install libwebp to run this test" unless dwebp_available?
     pixels = String.new(encoding: Encoding::BINARY)
     32.times do |y|
       32.times do |x|
@@ -78,8 +81,11 @@ class TestEncoder < Minitest::Test
 
   private
 
+  def dwebp_available?
+    system("which dwebp > /dev/null 2>&1")
+  end
+
   def dwebp_valid?(path)
-    system("which dwebp > /dev/null 2>&1") &&
-      system("dwebp #{path} -o /dev/null 2>/dev/null")
+    dwebp_available? && system("dwebp #{path} -o /dev/null 2>/dev/null")
   end
 end
