@@ -1,0 +1,67 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Development helper: decode a WebP with pura-webp, compare pixels against
+# macOS sips (libwebp) ground truth, and write both as side-by-side PNGs
+# for visual inspection.
+#
+# Usage: bin/dev_compare path/to/image.webp
+
+$LOAD_PATH.unshift File.expand_path("../lib", __dir__)
+require "pura-webp"
+require "tempfile"
+
+webp_path = ARGV[0] or abort "usage: #{$PROGRAM_NAME} <file.webp>"
+
+# Ground truth via sips
+ref_png = Tempfile.new(["ref", ".png"]).path
+system("sips", "-s", "format", "png", webp_path, "--out", ref_png, out: File::NULL, err: File::NULL) ||
+  abort("sips failed; ground truth unavailable")
+
+# Decode with pura-webp
+t = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+img = Pura::Webp.decode(webp_path)
+elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t
+
+# Decode ground-truth PNG via pura-png (already a pura-image dependency in komagata's setup)
+begin
+  require "pura-png"
+rescue LoadError
+  abort "pura-png not installed; install with: gem install pura-png"
+end
+ref = Pura::Png.decode(ref_png)
+
+unless [img.width, img.height] == [ref.width, ref.height]
+  abort "dim mismatch: decoded=#{img.width}x#{img.height} ref=#{ref.width}x#{ref.height}"
+end
+
+# Per-channel stats
+diffs_r = []
+diffs_g = []
+diffs_b = []
+n = img.pixels.bytesize / 3
+n.times do |i|
+  off = i * 3
+  diffs_r << (img.pixels.getbyte(off)     - ref.pixels.getbyte(off)).abs
+  diffs_g << (img.pixels.getbyte(off + 1) - ref.pixels.getbyte(off + 1)).abs
+  diffs_b << (img.pixels.getbyte(off + 2) - ref.pixels.getbyte(off + 2)).abs
+end
+
+fmt = ->(a) { format("mean=%.1f  max=%d  p99=%d", a.sum.to_f / a.size, a.max, a.sort[(a.size * 0.99).to_i]) }
+mae = (diffs_r + diffs_g + diffs_b).sum.to_f / (n * 3)
+
+puts "file:    #{webp_path}"
+puts "size:    #{img.width}x#{img.height}  (#{n} pixels)"
+puts "decode:  #{(elapsed * 1000).round(1)} ms"
+puts "R diff:  #{fmt.call(diffs_r)}"
+puts "G diff:  #{fmt.call(diffs_g)}"
+puts "B diff:  #{fmt.call(diffs_b)}"
+puts "overall: MAE=#{mae.round(2)}"
+
+# Dump decoded as PPM for visual inspection with sips
+out_ppm = "/tmp/pura_decoded.ppm"
+File.binwrite(out_ppm, "P6\n#{img.width} #{img.height}\n255\n" + img.pixels)
+out_png = "/tmp/pura_decoded.png"
+system("sips", "-s", "format", "png", out_ppm, "--out", out_png, out: File::NULL, err: File::NULL)
+puts "wrote:   #{out_png}  (pura-webp output)"
+puts "ref:     #{ref_png}  (sips ground truth)"

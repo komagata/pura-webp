@@ -73,4 +73,10 @@ Decode performance on a 400×400 WebP image, Ruby 4.0.2 + YJIT:
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
+
+The VP8 decoder is a Ruby port of the Go package
+[golang.org/x/image/vp8](https://pkg.go.dev/golang.org/x/image/vp8),
+which is distributed under the BSD-3-Clause license. See
+[LICENSE-GO](LICENSE-GO) for that notice. The Go copyright is retained
+on the ported files as required.
