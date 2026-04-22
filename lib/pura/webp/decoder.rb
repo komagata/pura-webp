@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+
 #
 # Ruby port of the VP8 decoder from golang.org/x/image/vp8. Copyright
 # on the Go original is retained; see LICENSE-GO for the upstream
@@ -107,7 +108,7 @@ module Pura
         b0 = read_u8
         b1 = read_u8
         b2 = read_u8
-        key_frame = (b0 & 1).zero?
+        key_frame = b0.nobits?(1)
         raise DecodeError, "interframes are not supported" unless key_frame
 
         first_partition_len = ((b0 >> 5) | (b1 << 3) | (b2 << 11)) & 0x7FFFF
@@ -205,10 +206,10 @@ module Pura
         @filter_use_lf_delta = @fp.read_bit(UNIFORM_PROB)
         @filter_ref_lf_delta = [0, 0, 0, 0]
         @filter_mode_lf_delta = [0, 0, 0, 0]
-        if @filter_use_lf_delta && @fp.read_bit(UNIFORM_PROB)
-          4.times { |i| @filter_ref_lf_delta[i]  = @fp.read_optional_int(UNIFORM_PROB, 6) }
-          4.times { |i| @filter_mode_lf_delta[i] = @fp.read_optional_int(UNIFORM_PROB, 6) }
-        end
+        return unless @filter_use_lf_delta && @fp.read_bit(UNIFORM_PROB)
+
+        4.times { |i| @filter_ref_lf_delta[i]  = @fp.read_optional_int(UNIFORM_PROB, 6) }
+        4.times { |i| @filter_mode_lf_delta[i] = @fp.read_optional_int(UNIFORM_PROB, 6) }
       end
 
       # ---- Other partitions (decode.go: parseOtherPartitions) ----
@@ -259,7 +260,9 @@ module Pura
           8.times do |j|
             3.times do |k|
               11.times do |l|
-                @token_prob[i][j][k][l] = @fp.read_uint(UNIFORM_PROB, 8) if @fp.read_bit(VP8Tables::TOKEN_PROB_UPDATE_PROB[i][j][k][l])
+                if @fp.read_bit(VP8Tables::TOKEN_PROB_UPDATE_PROB[i][j][k][l])
+                  @token_prob[i][j][k][l] = @fp.read_uint(UNIFORM_PROB, 8)
+                end
               end
             end
           end
@@ -270,11 +273,11 @@ module Pura
 
       def reconstruct(mbx, mby)
         if @update_map
-          if !@fp.read_bit(@seg_prob[0])
-            @segment = @fp.read_bit(@seg_prob[1]) ? 1 : 0
-          else
-            @segment = (@fp.read_bit(@seg_prob[2]) ? 1 : 0) + 2
-          end
+          @segment = if @fp.read_bit(@seg_prob[0])
+                       (@fp.read_bit(@seg_prob[2]) ? 1 : 0) + 2
+                     else
+                       @fp.read_bit(@seg_prob[1]) ? 1 : 0
+                     end
         end
         skip = @use_skip_prob ? @fp.read_bit(@skip_prob) : false
 
@@ -329,13 +332,13 @@ module Pura
           (7..15).each { |x| @ybr[17][x] = 0x7F }
           (23..31).each { |x| @ybr[17][x] = 0x7F }
         else
-          16.times { |i| @ybr[0][8 + i] = @img_y[((16 * mby) - 1) * @y_stride + (16 * mbx) + i] }
-          8.times  { |i| @ybr[17][8 + i]  = @img_cb[((8 * mby) - 1) * @c_stride + (8 * mbx) + i] }
-          8.times  { |i| @ybr[17][24 + i] = @img_cr[((8 * mby) - 1) * @c_stride + (8 * mbx) + i] }
+          16.times { |i| @ybr[0][8 + i] = @img_y[(((16 * mby) - 1) * @y_stride) + (16 * mbx) + i] }
+          8.times  { |i| @ybr[17][8 + i]  = @img_cb[(((8 * mby) - 1) * @c_stride) + (8 * mbx) + i] }
+          8.times  { |i| @ybr[17][24 + i] = @img_cr[(((8 * mby) - 1) * @c_stride) + (8 * mbx) + i] }
           if mbx == @mbw - 1
-            (16..19).each { |i| @ybr[0][8 + i] = @img_y[((16 * mby) - 1) * @y_stride + (16 * mbx) + 15] }
+            (16..19).each { |i| @ybr[0][8 + i] = @img_y[(((16 * mby) - 1) * @y_stride) + (16 * mbx) + 15] }
           else
-            (16..19).each { |i| @ybr[0][8 + i] = @img_y[((16 * mby) - 1) * @y_stride + (16 * mbx) + i] }
+            (16..19).each { |i| @ybr[0][8 + i] = @img_y[(((16 * mby) - 1) * @y_stride) + (16 * mbx) + i] }
           end
         end
         [4, 8, 12].each do |y|
@@ -350,7 +353,7 @@ module Pura
 
       def parse_pred_mode_y16(mbx)
         p = if !@fp.read_bit(156)
-              !@fp.read_bit(163) ? PRED_DC : PRED_VE
+              @fp.read_bit(163) ? PRED_VE : PRED_DC
             elsif !@fp.read_bit(128)
               PRED_HE
             else
@@ -440,7 +443,7 @@ module Pura
             nz = parse_residuals4(partition, plane, nz + unz[x], q[:y1], @use_pred_y16, coeff_base)
             unz[x] = nz
             nz_ac[x] = nz
-            nz_dc[x] = (@coeff[coeff_base] != 0) ? 1 : 0
+            nz_dc[x] = @coeff[coeff_base].zero? ? 0 : 1
             coeff_base += 16
           end
           lnz[y] = nz
@@ -461,14 +464,14 @@ module Pura
             2.times do |x|
               nz = parse_residuals4(partition, PLANE_UV, nz + unz[x + ch], q[:uv], false, coeff_base)
               unz[x + ch] = nz
-              nz_ac[y * 2 + x] = nz
-              nz_dc[y * 2 + x] = (@coeff[coeff_base] != 0) ? 1 : 0
+              nz_ac[(y * 2) + x] = nz
+              nz_dc[(y * 2) + x] = @coeff[coeff_base].zero? ? 0 : 1
               coeff_base += 16
             end
             lnz[y + ch] = nz
           end
-          nz_dc_mask |= pack4(nz_dc, 16 + ch * 2)
-          nz_ac_mask |= pack4(nz_ac, 16 + ch * 2)
+          nz_dc_mask |= pack4(nz_dc, 16 + (ch * 2))
+          nz_ac_mask |= pack4(nz_ac, 16 + (ch * 2))
           ch += 2
         end
         lnz_mask |= pack4(lnz, 4)
@@ -495,37 +498,37 @@ module Pura
             p = prob[VP8Tables::BANDS[n]][0]
             next
           end
-          v = if !r.read_bit(p[2])
-                p = prob[VP8Tables::BANDS[n]][1]
-                1
-              else
+          v = if r.read_bit(p[2])
                 large = if !r.read_bit(p[3])
-                          if !r.read_bit(p[4])
-                            2
-                          else
+                          if r.read_bit(p[4])
                             3 + r.read_uint(p[5], 1)
+                          else
+                            2
                           end
                         elsif !r.read_bit(p[6])
-                          if !r.read_bit(p[7])
-                            5 + r.read_uint(159, 1) # CAT1
+                          if r.read_bit(p[7])
+                            7 + (2 * r.read_uint(165, 1)) + r.read_uint(145, 1) # CAT2
                           else
-                            7 + 2 * r.read_uint(165, 1) + r.read_uint(145, 1) # CAT2
+                            5 + r.read_uint(159, 1) # CAT1
                           end
                         else
                           b1 = r.read_uint(p[8], 1)
                           b0 = r.read_uint(p[9 + b1], 1)
-                          cat = 2 * b1 + b0
+                          cat = (2 * b1) + b0
                           tab = VP8Tables::CAT3456[cat]
                           accum = 0
                           i = 0
                           while tab[i] != 0
-                            accum = accum * 2 + r.read_uint(tab[i], 1)
+                            accum = (accum * 2) + r.read_uint(tab[i], 1)
                             i += 1
                           end
                           accum + 3 + (8 << cat)
                         end
                 p = prob[VP8Tables::BANDS[n]][2]
                 large
+              else
+                p = prob[VP8Tables::BANDS[n]][1]
+                1
               end
           z = VP8Tables::ZIGZAG[n - 1]
           c = v * quant[z.positive? ? 1 : 0]
@@ -544,13 +547,13 @@ module Pura
           call_pred16(p, 1, 8)
           4.times do |j|
             4.times do |i|
-              n = 4 * j + i
-              y = 4 * j + 1
-              x = 4 * i + 8
+              n = (4 * j) + i
+              y = (4 * j) + 1
+              x = (4 * i) + 8
               mask = 1 << n
-              if (@nz_ac_mask & mask) != 0
+              if @nz_ac_mask.anybits?(mask)
                 inverse_dct4(y, x, 16 * n)
-              elsif (@nz_dc_mask & mask) != 0
+              elsif @nz_dc_mask.anybits?(mask)
                 inverse_dct4_dc_only(y, x, 16 * n)
               end
             end
@@ -558,14 +561,14 @@ module Pura
         else
           4.times do |j|
             4.times do |i|
-              n = 4 * j + i
-              y = 4 * j + 1
-              x = 4 * i + 8
+              n = (4 * j) + i
+              y = (4 * j) + 1
+              x = (4 * i) + 8
               call_pred4(@pred_y4[j][i], y, x)
               mask = 1 << n
-              if (@nz_ac_mask & mask) != 0
+              if @nz_ac_mask.anybits?(mask)
                 inverse_dct4(y, x, 16 * n)
-              elsif (@nz_dc_mask & mask) != 0
+              elsif @nz_dc_mask.anybits?(mask)
                 inverse_dct4_dc_only(y, x, 16 * n)
               end
             end
@@ -573,15 +576,15 @@ module Pura
         end
         p = check_top_left_pred(mbx, mby, @pred_c8)
         call_pred8(p, YBR_B_Y, YBR_B_X)
-        if (@nz_ac_mask & 0x0F0000) != 0
+        if @nz_ac_mask.anybits?(0x0F0000)
           inverse_dct8(YBR_B_Y, YBR_B_X, B_COEFF_BASE)
-        elsif (@nz_dc_mask & 0x0F0000) != 0
+        elsif @nz_dc_mask.anybits?(0x0F0000)
           inverse_dct8_dc_only(YBR_B_Y, YBR_B_X, B_COEFF_BASE)
         end
         call_pred8(p, YBR_R_Y, YBR_R_X)
-        if (@nz_ac_mask & 0xF00000) != 0
+        if @nz_ac_mask.anybits?(0xF00000)
           inverse_dct8(YBR_R_Y, YBR_R_X, R_COEFF_BASE)
-        elsif (@nz_dc_mask & 0xF00000) != 0
+        elsif @nz_dc_mask.anybits?(0xF00000)
           inverse_dct8_dc_only(YBR_R_Y, YBR_R_X, R_COEFF_BASE)
         end
       end
@@ -600,12 +603,12 @@ module Pura
 
       def copy_ybr_to_image(mbx, mby)
         16.times do |y|
-          off = ((mby * 16) + y) * @y_stride + (mbx * 16)
+          off = (((mby * 16) + y) * @y_stride) + (mbx * 16)
           src = @ybr[YBR_Y_Y + y]
           16.times { |i| @img_y[off + i] = src[YBR_Y_X + i] }
         end
         8.times do |y|
-          off = ((mby * 8) + y) * @c_stride + (mbx * 8)
+          off = (((mby * 8) + y) * @c_stride) + (mbx * 8)
           srcb = @ybr[YBR_B_Y + y]
           srcr = @ybr[YBR_R_Y + y]
           8.times do |i|
@@ -676,11 +679,11 @@ module Pura
         end
         out = 0
         4.times do |i|
-          dc = m[0 + i * 4] + 3
-          a0 = dc + m[3 + i * 4]
-          a1 = m[1 + i * 4] + m[2 + i * 4]
-          a2 = m[1 + i * 4] - m[2 + i * 4]
-          a3 = dc - m[3 + i * 4]
+          dc = m[0 + (i * 4)] + 3
+          a0 = dc + m[3 + (i * 4)]
+          a1 = m[1 + (i * 4)] + m[2 + (i * 4)]
+          a2 = m[1 + (i * 4)] - m[2 + (i * 4)]
+          a3 = dc - m[3 + (i * 4)]
           @coeff[out + 0]  = (a0 + a1) >> 3
           @coeff[out + 16] = (a3 + a2) >> 3
           @coeff[out + 32] = (a0 - a1) >> 3
@@ -806,10 +809,22 @@ module Pura
         abc = (a + (2 * b) + c + 2) >> 2
         bcd = (b + (2 * c) + d + 2) >> 2
         cde = (c + (2 * d) + e + 2) >> 2
-        @ybr[y + 0][x + 0] = pab; @ybr[y + 0][x + 1] = abc; @ybr[y + 0][x + 2] = bcd; @ybr[y + 0][x + 3] = cde
-        @ybr[y + 1][x + 0] = qpa; @ybr[y + 1][x + 1] = pab; @ybr[y + 1][x + 2] = abc; @ybr[y + 1][x + 3] = bcd
-        @ybr[y + 2][x + 0] = rqp; @ybr[y + 2][x + 1] = qpa; @ybr[y + 2][x + 2] = pab; @ybr[y + 2][x + 3] = abc
-        @ybr[y + 3][x + 0] = srq; @ybr[y + 3][x + 1] = rqp; @ybr[y + 3][x + 2] = qpa; @ybr[y + 3][x + 3] = pab
+        @ybr[y + 0][x + 0] = pab
+        @ybr[y + 0][x + 1] = abc
+        @ybr[y + 0][x + 2] = bcd
+        @ybr[y + 0][x + 3] = cde
+        @ybr[y + 1][x + 0] = qpa
+        @ybr[y + 1][x + 1] = pab
+        @ybr[y + 1][x + 2] = abc
+        @ybr[y + 1][x + 3] = bcd
+        @ybr[y + 2][x + 0] = rqp
+        @ybr[y + 2][x + 1] = qpa
+        @ybr[y + 2][x + 2] = pab
+        @ybr[y + 2][x + 3] = abc
+        @ybr[y + 3][x + 0] = srq
+        @ybr[y + 3][x + 1] = rqp
+        @ybr[y + 3][x + 2] = qpa
+        @ybr[y + 3][x + 3] = pab
       end
 
       def pred4_vr(y, x)
@@ -831,15 +846,33 @@ module Pura
         abc = (a + (2 * b) + c + 2) >> 2
         bcd = (b + (2 * c) + d + 2) >> 2
         cde = (c + (2 * d) + e + 2) >> 2
-        @ybr[y + 0][x + 0] = ab;  @ybr[y + 0][x + 1] = bc;  @ybr[y + 0][x + 2] = cd;  @ybr[y + 0][x + 3] = de
-        @ybr[y + 1][x + 0] = pab; @ybr[y + 1][x + 1] = abc; @ybr[y + 1][x + 2] = bcd; @ybr[y + 1][x + 3] = cde
-        @ybr[y + 2][x + 0] = qpa; @ybr[y + 2][x + 1] = ab;  @ybr[y + 2][x + 2] = bc;  @ybr[y + 2][x + 3] = cd
-        @ybr[y + 3][x + 0] = rqp; @ybr[y + 3][x + 1] = pab; @ybr[y + 3][x + 2] = abc; @ybr[y + 3][x + 3] = bcd
+        @ybr[y + 0][x + 0] = ab
+        @ybr[y + 0][x + 1] = bc
+        @ybr[y + 0][x + 2] = cd
+        @ybr[y + 0][x + 3] = de
+        @ybr[y + 1][x + 0] = pab
+        @ybr[y + 1][x + 1] = abc
+        @ybr[y + 1][x + 2] = bcd
+        @ybr[y + 1][x + 3] = cde
+        @ybr[y + 2][x + 0] = qpa
+        @ybr[y + 2][x + 1] = ab
+        @ybr[y + 2][x + 2] = bc
+        @ybr[y + 2][x + 3] = cd
+        @ybr[y + 3][x + 0] = rqp
+        @ybr[y + 3][x + 1] = pab
+        @ybr[y + 3][x + 2] = abc
+        @ybr[y + 3][x + 3] = bcd
       end
 
       def pred4_ld(y, x)
-        a = @ybr[y - 1][x + 0]; b = @ybr[y - 1][x + 1]; c = @ybr[y - 1][x + 2]; d = @ybr[y - 1][x + 3]
-        e = @ybr[y - 1][x + 4]; f = @ybr[y - 1][x + 5]; g = @ybr[y - 1][x + 6]; h = @ybr[y - 1][x + 7]
+        a = @ybr[y - 1][x + 0]
+        b = @ybr[y - 1][x + 1]
+        c = @ybr[y - 1][x + 2]
+        d = @ybr[y - 1][x + 3]
+        e = @ybr[y - 1][x + 4]
+        f = @ybr[y - 1][x + 5]
+        g = @ybr[y - 1][x + 6]
+        h = @ybr[y - 1][x + 7]
         abc = (a + (2 * b) + c + 2) >> 2
         bcd = (b + (2 * c) + d + 2) >> 2
         cde = (c + (2 * d) + e + 2) >> 2
@@ -847,15 +880,33 @@ module Pura
         efg = (e + (2 * f) + g + 2) >> 2
         fgh = (f + (2 * g) + h + 2) >> 2
         ghh = (g + (2 * h) + h + 2) >> 2
-        @ybr[y + 0][x + 0] = abc; @ybr[y + 0][x + 1] = bcd; @ybr[y + 0][x + 2] = cde; @ybr[y + 0][x + 3] = def_
-        @ybr[y + 1][x + 0] = bcd; @ybr[y + 1][x + 1] = cde; @ybr[y + 1][x + 2] = def_; @ybr[y + 1][x + 3] = efg
-        @ybr[y + 2][x + 0] = cde; @ybr[y + 2][x + 1] = def_; @ybr[y + 2][x + 2] = efg; @ybr[y + 2][x + 3] = fgh
-        @ybr[y + 3][x + 0] = def_; @ybr[y + 3][x + 1] = efg; @ybr[y + 3][x + 2] = fgh; @ybr[y + 3][x + 3] = ghh
+        @ybr[y + 0][x + 0] = abc
+        @ybr[y + 0][x + 1] = bcd
+        @ybr[y + 0][x + 2] = cde
+        @ybr[y + 0][x + 3] = def_
+        @ybr[y + 1][x + 0] = bcd
+        @ybr[y + 1][x + 1] = cde
+        @ybr[y + 1][x + 2] = def_
+        @ybr[y + 1][x + 3] = efg
+        @ybr[y + 2][x + 0] = cde
+        @ybr[y + 2][x + 1] = def_
+        @ybr[y + 2][x + 2] = efg
+        @ybr[y + 2][x + 3] = fgh
+        @ybr[y + 3][x + 0] = def_
+        @ybr[y + 3][x + 1] = efg
+        @ybr[y + 3][x + 2] = fgh
+        @ybr[y + 3][x + 3] = ghh
       end
 
       def pred4_vl(y, x)
-        a = @ybr[y - 1][x + 0]; b = @ybr[y - 1][x + 1]; c = @ybr[y - 1][x + 2]; d = @ybr[y - 1][x + 3]
-        e = @ybr[y - 1][x + 4]; f = @ybr[y - 1][x + 5]; g = @ybr[y - 1][x + 6]; h = @ybr[y - 1][x + 7]
+        a = @ybr[y - 1][x + 0]
+        b = @ybr[y - 1][x + 1]
+        c = @ybr[y - 1][x + 2]
+        d = @ybr[y - 1][x + 3]
+        e = @ybr[y - 1][x + 4]
+        f = @ybr[y - 1][x + 5]
+        g = @ybr[y - 1][x + 6]
+        h = @ybr[y - 1][x + 7]
         ab = (a + b + 1) >> 1
         bc = (b + c + 1) >> 1
         cd = (c + d + 1) >> 1
@@ -866,15 +917,33 @@ module Pura
         def_ = (d + (2 * e) + f + 2) >> 2
         efg = (e + (2 * f) + g + 2) >> 2
         fgh = (f + (2 * g) + h + 2) >> 2
-        @ybr[y + 0][x + 0] = ab;  @ybr[y + 0][x + 1] = bc;  @ybr[y + 0][x + 2] = cd;  @ybr[y + 0][x + 3] = de
-        @ybr[y + 1][x + 0] = abc; @ybr[y + 1][x + 1] = bcd; @ybr[y + 1][x + 2] = cde; @ybr[y + 1][x + 3] = def_
-        @ybr[y + 2][x + 0] = bc;  @ybr[y + 2][x + 1] = cd;  @ybr[y + 2][x + 2] = de;  @ybr[y + 2][x + 3] = efg
-        @ybr[y + 3][x + 0] = bcd; @ybr[y + 3][x + 1] = cde; @ybr[y + 3][x + 2] = def_; @ybr[y + 3][x + 3] = fgh
+        @ybr[y + 0][x + 0] = ab
+        @ybr[y + 0][x + 1] = bc
+        @ybr[y + 0][x + 2] = cd
+        @ybr[y + 0][x + 3] = de
+        @ybr[y + 1][x + 0] = abc
+        @ybr[y + 1][x + 1] = bcd
+        @ybr[y + 1][x + 2] = cde
+        @ybr[y + 1][x + 3] = def_
+        @ybr[y + 2][x + 0] = bc
+        @ybr[y + 2][x + 1] = cd
+        @ybr[y + 2][x + 2] = de
+        @ybr[y + 2][x + 3] = efg
+        @ybr[y + 3][x + 0] = bcd
+        @ybr[y + 3][x + 1] = cde
+        @ybr[y + 3][x + 2] = def_
+        @ybr[y + 3][x + 3] = fgh
       end
 
       def pred4_hd(y, x)
-        s = @ybr[y + 3][x - 1]; r = @ybr[y + 2][x - 1]; q = @ybr[y + 1][x - 1]; p = @ybr[y + 0][x - 1]
-        a = @ybr[y - 1][x - 1]; b = @ybr[y - 1][x + 0]; c = @ybr[y - 1][x + 1]; d = @ybr[y - 1][x + 2]
+        s = @ybr[y + 3][x - 1]
+        r = @ybr[y + 2][x - 1]
+        q = @ybr[y + 1][x - 1]
+        p = @ybr[y + 0][x - 1]
+        a = @ybr[y - 1][x - 1]
+        b = @ybr[y - 1][x + 0]
+        c = @ybr[y - 1][x + 1]
+        d = @ybr[y - 1][x + 2]
         sr = (s + r + 1) >> 1
         rq = (r + q + 1) >> 1
         qp = (q + p + 1) >> 1
@@ -885,14 +954,29 @@ module Pura
         pab = (p + (2 * a) + b + 2) >> 2
         abc = (a + (2 * b) + c + 2) >> 2
         bcd = (b + (2 * c) + d + 2) >> 2
-        @ybr[y + 0][x + 0] = pa;  @ybr[y + 0][x + 1] = pab; @ybr[y + 0][x + 2] = abc; @ybr[y + 0][x + 3] = bcd
-        @ybr[y + 1][x + 0] = qp;  @ybr[y + 1][x + 1] = qpa; @ybr[y + 1][x + 2] = pa;  @ybr[y + 1][x + 3] = pab
-        @ybr[y + 2][x + 0] = rq;  @ybr[y + 2][x + 1] = rqp; @ybr[y + 2][x + 2] = qp;  @ybr[y + 2][x + 3] = qpa
-        @ybr[y + 3][x + 0] = sr;  @ybr[y + 3][x + 1] = srq; @ybr[y + 3][x + 2] = rq;  @ybr[y + 3][x + 3] = rqp
+        @ybr[y + 0][x + 0] = pa
+        @ybr[y + 0][x + 1] = pab
+        @ybr[y + 0][x + 2] = abc
+        @ybr[y + 0][x + 3] = bcd
+        @ybr[y + 1][x + 0] = qp
+        @ybr[y + 1][x + 1] = qpa
+        @ybr[y + 1][x + 2] = pa
+        @ybr[y + 1][x + 3] = pab
+        @ybr[y + 2][x + 0] = rq
+        @ybr[y + 2][x + 1] = rqp
+        @ybr[y + 2][x + 2] = qp
+        @ybr[y + 2][x + 3] = qpa
+        @ybr[y + 3][x + 0] = sr
+        @ybr[y + 3][x + 1] = srq
+        @ybr[y + 3][x + 2] = rq
+        @ybr[y + 3][x + 3] = rqp
       end
 
       def pred4_hu(y, x)
-        s = @ybr[y + 3][x - 1]; r = @ybr[y + 2][x - 1]; q = @ybr[y + 1][x - 1]; p = @ybr[y + 0][x - 1]
+        s = @ybr[y + 3][x - 1]
+        r = @ybr[y + 2][x - 1]
+        q = @ybr[y + 1][x - 1]
+        p = @ybr[y + 0][x - 1]
         pq = (p + q + 1) >> 1
         qr = (q + r + 1) >> 1
         rs = (r + s + 1) >> 1
@@ -900,10 +984,22 @@ module Pura
         qrs = (q + (2 * r) + s + 2) >> 2
         rss = (r + (2 * s) + s + 2) >> 2
         sss = s
-        @ybr[y + 0][x + 0] = pq;  @ybr[y + 0][x + 1] = pqr; @ybr[y + 0][x + 2] = qr;  @ybr[y + 0][x + 3] = qrs
-        @ybr[y + 1][x + 0] = qr;  @ybr[y + 1][x + 1] = qrs; @ybr[y + 1][x + 2] = rs;  @ybr[y + 1][x + 3] = rss
-        @ybr[y + 2][x + 0] = rs;  @ybr[y + 2][x + 1] = rss; @ybr[y + 2][x + 2] = sss; @ybr[y + 2][x + 3] = sss
-        @ybr[y + 3][x + 0] = sss; @ybr[y + 3][x + 1] = sss; @ybr[y + 3][x + 2] = sss; @ybr[y + 3][x + 3] = sss
+        @ybr[y + 0][x + 0] = pq
+        @ybr[y + 0][x + 1] = pqr
+        @ybr[y + 0][x + 2] = qr
+        @ybr[y + 0][x + 3] = qrs
+        @ybr[y + 1][x + 0] = qr
+        @ybr[y + 1][x + 1] = qrs
+        @ybr[y + 1][x + 2] = rs
+        @ybr[y + 1][x + 3] = rss
+        @ybr[y + 2][x + 0] = rs
+        @ybr[y + 2][x + 1] = rss
+        @ybr[y + 2][x + 2] = sss
+        @ybr[y + 2][x + 3] = sss
+        @ybr[y + 3][x + 0] = sss
+        @ybr[y + 3][x + 1] = sss
+        @ybr[y + 3][x + 2] = sss
+        @ybr[y + 3][x + 3] = sss
       end
 
       # 8x8 chroma predictors
@@ -1018,11 +1114,19 @@ module Pura
       # ---- Helpers ----
 
       def clip(x, lo, hi)
-        x < lo ? lo : (x > hi ? hi : x)
+        if x < lo
+          lo
+        else
+          [x, hi].min
+        end
       end
 
       def clip8(x)
-        x < 0 ? 0 : (x > 255 ? 255 : x)
+        if x.negative?
+          0
+        else
+          [x, 255].min
+        end
       end
 
       def pack4(arr, shift)

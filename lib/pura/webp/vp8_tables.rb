@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+
 #
 # Ruby port of VP8 tables from golang.org/x/image/vp8. Copyright on the
 # Go original is retained; see LICENSE-GO for the upstream BSD-3-Clause

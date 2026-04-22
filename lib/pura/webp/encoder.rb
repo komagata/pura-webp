@@ -117,7 +117,7 @@ module Pura
       end
 
       # Quantize channel to 2 most frequent values
-      def quantize_channel(values, uniq)
+      def quantize_channel(values, _uniq)
         # Find 2 most frequent
         freq = Hash.new(0)
         values.each { |v| freq[v] += 1 }
@@ -148,7 +148,7 @@ module Pura
       # Build huffman code lengths from histogram
       def build_huffman_lengths(hist, max_symbols)
         non_zero = []
-        hist.each_with_index { |c, s| non_zero << [c, s] if c > 0 }
+        hist.each_with_index { |c, s| non_zero << [c, s] if c.positive? }
 
         lengths = Array.new(max_symbols, 0)
 
@@ -193,7 +193,7 @@ module Pura
 
         # Collect non-zero lengths with symbols
         syms = []
-        lengths.each_with_index { |l, s| syms << [l, s] if l > 0 }
+        lengths.each_with_index { |l, s| syms << [l, s] if l.positive? }
         return if syms.empty?
 
         # Cap all lengths
@@ -220,10 +220,10 @@ module Pura
       # Build canonical huffman codes from lengths
       def canonical_codes(lengths)
         max_len = lengths.max || 0
-        return {} if max_len == 0
+        return {} if max_len.zero?
 
         bl_count = Array.new(max_len + 1, 0)
-        lengths.each { |l| bl_count[l] += 1 if l > 0 }
+        lengths.each { |l| bl_count[l] += 1 if l.positive? }
 
         next_code = Array.new(max_len + 1, 0)
         code = 0
@@ -234,7 +234,7 @@ module Pura
 
         codes = {}
         lengths.each_with_index do |len, sym|
-          next if len == 0
+          next if len.zero?
 
           codes[sym] = [next_code[len], len]
           next_code[len] += 1
@@ -252,7 +252,7 @@ module Pura
         return unless entry
 
         code, len = entry
-        return if len == 0  # singleton in normal huffman
+        return if len.zero? # singleton in normal huffman
 
         # VP8L: huffman codes written MSB first
         len.times do |i|
@@ -263,17 +263,18 @@ module Pura
       # Write code lengths to bitstream using the VP8L format
       def write_code_lengths(bw, lengths)
         # Find how many symbols we actually have
-        non_zero_count = lengths.count { |l| l > 0 }
+        non_zero_count = lengths.count(&:positive?)
         non_zero_syms = []
-        lengths.each_with_index { |l, s| non_zero_syms << s if l > 0 }
+        lengths.each_with_index { |l, s| non_zero_syms << s if l.positive? }
 
-        if non_zero_count == 0
+        case non_zero_count
+        when 0
           # Write simple code with 1 symbol (symbol 0)
           bw.write_bits(1, 1)  # is_simple
           bw.write_bits(0, 1)  # num_symbols - 1 = 0
           bw.write_bits(0, 1)  # is_first_8bit = false (1-bit symbol)
           bw.write_bits(0, 1)  # symbol = 0
-        elsif non_zero_count == 1
+        when 1
           sym = non_zero_syms[0]
           bw.write_bits(1, 1)   # is_simple
           bw.write_bits(0, 1)   # num_symbols - 1 = 0
@@ -284,7 +285,7 @@ module Pura
             bw.write_bits(1, 1)  # 8-bit symbol
             bw.write_bits(sym, 8)
           end
-        elsif non_zero_count == 2
+        when 2
           bw.write_bits(1, 1)   # is_simple
           bw.write_bits(1, 1)   # num_symbols - 1 = 1 (2 symbols)
           s0 = non_zero_syms[0]
@@ -303,7 +304,7 @@ module Pura
       end
 
       def write_normal_code_lengths(bw, lengths)
-        bw.write_bits(0, 1)  # is_simple = false
+        bw.write_bits(0, 1) # is_simple = false
 
         # Must cover all symbols in the alphabet (lengths.size)
         # The decoder reads alphabet_size code lengths
@@ -311,7 +312,7 @@ module Pura
 
         # Code length alphabet: 0-15 literal lengths, 16=repeat, 17=zero run 3-10, 18=zero run 11-138
         # VP8L code length code order
-        kCodeLengthCodeOrder = [17, 18, 0, 1, 2, 3, 4, 5, 16, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        code_length_code_order = [17, 18, 0, 1, 2, 3, 4, 5, 16, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
         # RLE encode the code lengths
         rle = rle_encode(lengths, num_symbols)
@@ -327,8 +328,8 @@ module Pura
 
         # Determine num_code_length_codes (at least 4)
         num_cl = 4
-        kCodeLengthCodeOrder.each_with_index do |order_idx, i|
-          num_cl = i + 1 if cl_lengths[order_idx] > 0
+        code_length_code_order.each_with_index do |order_idx, i|
+          num_cl = i + 1 if cl_lengths[order_idx].positive?
         end
         num_cl = [num_cl, 4].max
 
@@ -336,7 +337,7 @@ module Pura
 
         # Write code length code lengths
         num_cl.times do |i|
-          bw.write_bits(cl_lengths[kCodeLengthCodeOrder[i]], 3)
+          bw.write_bits(cl_lengths[code_length_code_order[i]], 3)
         end
 
         # Build codes for code length symbols
@@ -346,7 +347,7 @@ module Pura
         bw.write_bits(0, 1)
 
         # Write the RLE-encoded code lengths
-        rle.each do |sym, extra_bits, extra_val|
+        rle.each do |sym, _extra_bits, extra_val|
           emit_code(bw, cl_codes, sym)
           case sym
           when 16 then bw.write_bits(extra_val, 2)
@@ -361,11 +362,11 @@ module Pura
         i = 0
         while i < num_symbols
           val = lengths[i]
-          if val == 0
+          if val.zero?
             run = 0
-            run += 1 while i + run < num_symbols && lengths[i + run] == 0
+            run += 1 while i + run < num_symbols && lengths[i + run].zero?
             i += run
-            while run > 0
+            while run.positive?
               if run >= 11
                 extra = [run - 11, 127].min
                 result << [18, 7, extra]
@@ -417,7 +418,7 @@ module Pura
         end
 
         def finish
-          @data << (@current & 0xFF).chr if @bits > 0
+          @data << (@current & 0xFF).chr if @bits.positive?
           @data
         end
 
