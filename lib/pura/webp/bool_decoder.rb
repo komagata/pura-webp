@@ -1,9 +1,14 @@
 # frozen_string_literal: true
+#
+# Ruby port of golang.org/x/image/vp8/partition.go. Copyright on the
+# Go original is retained; see LICENSE-GO for the upstream BSD-3-Clause
+# license. Modifications for Ruby are under the gem's MIT license.
+#
+# Copyright 2011 The Go Authors. All rights reserved.
 
 module Pura
   module Webp
-    # VP8 arithmetic bit decoder. Direct port of golang.org/x/image/vp8/partition.go
-    # (BSD-3-Clause). Follows libwebp's optimized formulation with precomputed
+    # VP8 arithmetic bit decoder. Direct port of golang.org/x/image/vp8/partition.go. Follows libwebp's optimized formulation with precomputed
     # shift/range lookup tables so normalization is O(1) per bit.
     class BoolDecoder
       LUT_SHIFT = [

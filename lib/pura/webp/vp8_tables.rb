@@ -1,9 +1,15 @@
 # frozen_string_literal: true
+#
+# Ruby port of VP8 tables from golang.org/x/image/vp8. Copyright on the
+# Go original is retained; see LICENSE-GO for the upstream BSD-3-Clause
+# license. Modifications for Ruby are under the gem's MIT license.
+#
+# Copyright 2011 The Go Authors. All rights reserved.
 
 module Pura
   module Webp
     # VP8 static tables. Values and layout are transcribed from
-    # golang.org/x/image/vp8 (BSD-3-Clause) verbatim. The token probability
+    # golang.org/x/image/vp8 verbatim. The token probability
     # plane ordering (0=Y-after-Y2, 1=Y2, 2=UV, 3=Y-no-Y2) follows Go/libwebp
     # — NOT libvpx's (1 and 3 are swapped there).
     module VP8Tables

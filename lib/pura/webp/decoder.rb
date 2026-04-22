@@ -1,4 +1,11 @@
 # frozen_string_literal: true
+#
+# Ruby port of the VP8 decoder from golang.org/x/image/vp8. Copyright
+# on the Go original is retained; see LICENSE-GO for the upstream
+# BSD-3-Clause license. Modifications for Ruby are under the gem's MIT
+# license.
+#
+# Copyright 2011 The Go Authors. All rights reserved.
 
 require_relative "vp8_tables"
 
@@ -7,7 +14,7 @@ module Pura
     class DecodeError < StandardError; end
 
     # VP8 keyframe (lossy WebP) decoder. This is a Ruby port of
-    # golang.org/x/image/vp8 (BSD-3-Clause), specifically the files
+    # golang.org/x/image/vp8, specifically the files
     # decode.go, partition.go, pred.go, predfunc.go, idct.go, token.go,
     # quant.go and reconstruct.go. The port is as line-by-line as
     # practical, including variable names and the ybr workspace layout,
