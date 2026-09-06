@@ -1,6 +1,6 @@
 # pura-webp
 
-A pure Ruby WebP decoder and encoder with zero C extension dependencies.
+A pure Ruby WebP decoder and encoder without additional image-processing libraries.
 
 Part of the **pura-*** series — pure Ruby image codec gems.
 
@@ -8,7 +8,7 @@ Part of the **pura-*** series — pure Ruby image codec gems.
 
 - VP8 lossy WebP decoding
 - VP8L lossless WebP encoding
-- No native extensions, no FFI, no external dependencies
+- No image-specific native extension or FFI dependency
 - CLI tool included
 
 ## Installation
@@ -39,6 +39,8 @@ Pura::Webp.encode(thumb, "thumb.webp")
 
 ## Benchmark
 
+These historical measurements include ffmpeg process startup. They do not compare against an in-process C codec or establish Rails pipeline throughput.
+
 Decode performance on a 400×400 WebP image, Ruby 4.0.2 + YJIT:
 
 | Operation | pura-webp | ffmpeg (C + SIMD) | vs ffmpeg |
@@ -48,8 +50,6 @@ Decode performance on a 400×400 WebP image, Ruby 4.0.2 + YJIT:
 ## Why pure Ruby?
 
 - **`gem install` and go** — no `brew install webp`, no `apt install libwebp-dev`
-- **Works everywhere Ruby works** — CRuby, ruby.wasm, mruby, JRuby, TruffleRuby
-- **Edge/Wasm ready** — browsers (ruby.wasm), sandboxed environments
 - **No system library needed** — unlike every other Ruby WebP solution
 
 ## Current Limitations
@@ -70,6 +70,12 @@ Decode performance on a 400×400 WebP image, Ruby 4.0.2 + YJIT:
 | [pura-ico](https://github.com/komagata/pura-ico) | ICO | ✅ |
 | **pura-webp** | **WebP** | ✅ |
 | [pura-image](https://github.com/komagata/pura-image) | All formats | ✅ |
+
+## Pixel model and limitations
+
+Images contain 8-bit RGB pixels. The encoder produces VP8L, which this decoder cannot read back yet. Decoded pixels are RGB and do not retain alpha. Multi-partition VP8 frames are also unsupported.
+
+`crop(x, y, width, height)` requires integer coordinates, positive dimensions, and a region entirely inside the image; invalid regions raise `ArgumentError`.
 
 ## License
 
