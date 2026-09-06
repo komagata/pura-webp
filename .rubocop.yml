@@ -87,3 +87,8 @@ Lint/DuplicateBranch:
 
 Lint/UselessConstantScoping:
   Enabled: false
+
+# Keep row/column multipliers aligned with the upstream Go VP8 port.
+Lint/UselessNumericOperation:
+  Exclude:
+    - "lib/pura/webp/decoder.rb"

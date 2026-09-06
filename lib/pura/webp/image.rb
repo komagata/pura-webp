@@ -81,6 +81,11 @@ module Pura
       end
 
       def crop(x, y, w, h)
+        unless [x, y, w, h].all?(Integer) &&
+               x >= 0 && y >= 0 && w.positive? && h.positive? && x + w <= @width && y + h <= @height
+          raise ArgumentError, "crop must be a positive integer region within the image"
+        end
+
         out = String.new(encoding: Encoding::BINARY, capacity: w * h * 3)
         h.times do |row|
           src_offset = (((y + row) * @width) + x) * 3
